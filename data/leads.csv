@@ -1,0 +1,41 @@
+company,domain,github_org,contact_name,contact_email,source,human_score
+Fly.io,fly.io,superfly,,,eval_seed,5
+Vercel,vercel.com,vercel,,,eval_seed,5
+Cloudflare,cloudflare.com,cloudflare,,,eval_seed,5
+HashiCorp,hashicorp.com,hashicorp,,,eval_seed,4
+Fermyon,fermyon.com,fermyon,,,eval_seed,5
+Wasmer,wasmer.io,wasmerio,,,eval_seed,5
+Koyeb,koyeb.com,koyeb,,,eval_seed,5
+Render,render.com,render-oss,,,eval_seed,5
+Railway,railway.com,railwayapp,,,eval_seed,5
+Temporal,temporal.io,temporalio,,,eval_seed,4
+Grafana Labs,grafana.com,grafana,,,eval_seed,3
+Tailscale,tailscale.com,tailscale,,,eval_seed,3
+Deno,deno.com,denoland,,,eval_seed,4
+Supabase,supabase.com,supabase,,,eval_seed,4
+Netlify,netlify.com,netlify,,,eval_seed,4
+DigitalOcean,digitalocean.com,digitalocean,,,eval_seed,5
+Docker,docker.com,docker,,,eval_seed,4
+Modal,modal.com,modal-labs,,,eval_seed,5
+E2B,e2b.dev,e2b-dev,,,eval_seed,5
+Scaleway,scaleway.com,scaleway,,,eval_seed,5
+Northflank,northflank.com,northflank,,,eval_seed,5
+Chainguard,chainguard.dev,chainguard-dev,,,eval_seed,4
+Airbnb,airbnb.com,airbnb,,,eval_seed,2
+Shopify,shopify.com,Shopify,,,eval_seed,3
+Spotify,spotify.com,spotify,,,eval_seed,3
+Stripe,stripe.com,stripe,,,eval_seed,3
+Nike,nike.com,nike-inc,,,eval_seed,1
+Walmart,walmart.com,walmartlabs,,,eval_seed,1
+Starbucks,starbucks.com,Starbucks,,,eval_seed,1
+Deloitte,deloitte.com,Deloitte,,,eval_seed,1
+McKinsey,mckinsey.com,McKinsey,,,eval_seed,1
+Ford,ford.com,Ford,,,eval_seed,1
+Marriott,marriott.com,marriott,,,eval_seed,1
+Siemens,siemens.com,siemens,,,eval_seed,2
+SAP,sap.com,SAP,,,eval_seed,2
+"Fly.io (duplicate, messy URL)",https://www.Fly.io/docs?ref=x,,Test Person,test.person@example.com,test_dirty,
+Bad Domain Co,not a domain,,,,test_dirty,
+,nocompany.io,,,,test_dirty,
+Bad Email Co,bademail.io,,X,not-an-email,test_dirty,
+Freemail Co,freemailco.io,,Y,someone@gmail.com,test_dirty,
