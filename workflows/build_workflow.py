@@ -120,9 +120,9 @@ PROVIDERS = {
     "groq": {
         "node": "Groq Score",
         "url": "https://api.groq.com/openai/v1/chat/completions",
-        "headers": [{"name": "Authorization", "value": "Bearer " + os.environ.get("GROQ_API_KEY", "YOUR_GROQ_API_KEY")}],
+        "headers": [],
         "model": "openai/gpt-oss-120b",
-        "cred": None,
+        "cred": {"id": "groq-key", "name": "Groq API key"},
         "wait": 6000,
         "body": ("={{ JSON.stringify({ model: '%(model)s', max_tokens: 1024, temperature: 0, "
                  "response_format: { type: 'json_object' }, messages: [{ role: 'system', content: $json.llm_system }, "

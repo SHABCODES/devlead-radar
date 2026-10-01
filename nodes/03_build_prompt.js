@@ -1,4 +1,4 @@
-﻿// Build Prompt: runs once per item. Only leads with real GitHub data get here.
+// Build Prompt: runs once per item. Only leads with real GitHub data get here.
 const s = $json;
 
 // Edit this to retarget the scoring. It describes the buyer, not the product pitch.
@@ -7,7 +7,6 @@ const ICP = [
   'Good-fit companies build or run infrastructure, developer platforms, serverless or edge compute,',
   'sandboxed code execution (CI, AI agent sandboxes), or any workload where cold starts and compute cost matter.',
   'Poor-fit companies mainly use software rather than build infrastructure (retail, consulting, banks, manufacturers).',
-  'Key distinction: infrastructure must be their product or service, not just a tool they use internally.',
 ].join(' ');
 
 const system = [

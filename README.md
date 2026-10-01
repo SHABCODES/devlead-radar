@@ -1,6 +1,6 @@
 # Lead Radar
 
-An n8n workflow that takes an inbound B2B lead, checks what the company actually builds on GitHub, scores fit from 1 to 5 with Claude, and saves the result to Postgres. It was designed around what a GTM engineer at a developer-infrastructure company does: enrichment, scoring, hygiene, and keeping the outbound engine running without manual work.
+An n8n workflow that takes an inbound B2B lead, checks what the company actually builds on GitHub, scores fit from 1 to 5 with an LLM, and saves the result to Postgres. It was designed around what a GTM engineer at a developer-infrastructure company does: enrichment, scoring, hygiene, and keeping the outbound engine running without manual work.
 
 The ICP is set for Unikraft (infrastructure, serverless, sandboxed compute). It lives in two clearly marked blocks (`nodes/02_signals.js` and `nodes/03_build_prompt.js`), so you can retarget it for any product.
 
@@ -32,7 +32,7 @@ A second workflow (`error-handler.json`) logs failed executions to a `workflow_e
 
 ## Run it
 
-Needs Docker, an Anthropic API key, and ideally a GitHub personal access token (unauthenticated GitHub allows only 60 requests/hour).
+Needs Docker, a Groq or Anthropic API key, and ideally a GitHub personal access token (unauthenticated GitHub allows only 60 requests/hour).
 
 ```bash
 cp .env.example .env            # set both secrets
@@ -42,7 +42,8 @@ python3 workflows/build_workflow.py --github-auth   # or without the flag for an
 
 1. Open http://localhost:5678 and create the owner account.
 2. Credentials, using exactly these names:
-   - **Anthropic API key**: type Header Auth, name `x-api-key`, value your key
+   - **Groq API key** (if using Groq): type Header Auth, name `Authorization`, value `Bearer <your key>`
+   - **Anthropic API key** (if using Claude): type Header Auth, name `x-api-key`, value your key
    - **GitHub token** (only if you built with `--github-auth`): Header Auth, name `Authorization`, value `Bearer <token>`
    - **CRM Postgres**: host `postgres`, database `crm`, user `crm`, password from `.env`
 3. Import `workflows/lead-radar.json` and `workflows/error-handler.json`.
@@ -69,8 +70,7 @@ python3 workflows/build_workflow.py --provider groq --hide-keyword-hits       # 
 **Groq setup**
 
 1. Create a free account at console.groq.com and make an API key under API Keys.
-2. Set `GROQ_API_KEY` in your environment. The builder reads it at build time so the key is never committed:
-   `export GROQ_API_KEY=gsk_...`
+2. In n8n create a credential of type **Header Auth** named exactly `Groq API key`: header name `Authorization`, value `Bearer <your key>`.
 3. Check the key and list the models available to you:
    `curl -s https://api.groq.com/openai/v1/models -H "Authorization: Bearer $GROQ_API_KEY"`
 4. Import the workflow built with `--provider groq`.
@@ -110,6 +110,8 @@ python3 tests/e2e/run_e2e.py
 
 Labels were applied by a single person to 33 companies (out of 40 test rows; 4 had no public GitHub org and 3 were deliberately invalid). The prompt was not tuned toward these labels. Numbers should be read as suggestive, not proof, at n=33.
 
+*Run details:* Evaluated Sept 30, 2026. Model: `openai/gpt-oss-120b` (max_tokens: 1024). Prompt version: `nodes/03_build_prompt.js` at commit `bb96cf3`.
+
 | Scorer | Exact | Within 1 pt | MAE | Hot-lead precision | Hot-lead recall | Spearman |
 |--------|-------|-------------|-----|--------------------|-----------------|----------|
 | LLM (Groq `openai/gpt-oss-120b`) | **55%** | **91%** | **0.61** | **0.83** | **0.95** | **0.76** |
@@ -117,7 +119,7 @@ Labels were applied by a single person to 33 companies (out of 40 test rows; 4 h
 
 All figures are for n=33. Hot lead = score 4 or 5. LLM fallbacks to rules: 0 (every lead with GitHub data got a valid LLM score).
 
-**Known gaps.** The three largest misses are Siemens, SAP and Tailscale, where the LLM scored 5 against labels of 2, 2 and 3. In each case the model's stated reason quotes the `keyword_hits` list almost verbatim — that list is produced by the rule stage, and large GitHub orgs accumulate those keywords even when infrastructure is not their product. Hiding `keyword_hits` from the model and having it judge from repo names and descriptions directly is a better experiment than patching the prompt. See `--hide-keyword-hits` below.
+**Known gaps.** The three largest misses are Siemens, SAP and Tailscale, where the LLM scored 5 against labels of 2, 2 and 3. In each case the model's stated reason quotes the `keyword_hits` list almost verbatim — that list is produced by the rule stage, and large GitHub orgs accumulate those keywords even when infrastructure is not their product. Hiding `keyword_hits` from the model and having it judge from repo names and descriptions directly is a better experiment than patching the prompt. See `--hide-keyword-hits` above.
 
 The upward bias on label-4 companies (all 7 scored 5) may partly reflect the labels: HashiCorp, Docker and Deno are plausibly 5s. Since both 4 and 5 count as hot, the practical impact is low.
 
