@@ -1,5 +1,7 @@
 # Lead Radar
 
+https://github.com/user-attachments/assets/3740aa1d-bdfb-484c-a176-716bf4a7fce9
+
 An n8n workflow that takes an inbound B2B lead, checks what the company actually builds on GitHub, scores fit from 1 to 5 with an LLM, and saves the result to Postgres. It was designed around what a GTM engineer at a developer-infrastructure company does: enrichment, scoring, hygiene, and keeping the outbound engine running without manual work.
 
 The ICP is set for Unikraft (infrastructure, serverless, sandboxed compute). It lives in two clearly marked blocks (`nodes/02_signals.js` and `nodes/03_build_prompt.js`), so you can retarget it for any product.
