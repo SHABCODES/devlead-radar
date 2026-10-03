@@ -1,6 +1,7 @@
 # Lead Radar
 
-https://github.com/user-attachments/assets/3740aa1d-bdfb-484c-a176-716bf4a7fce9
+![Workflow](workflow.png)
+![HubSpot](hubspot.png)
 
 An n8n workflow that takes an inbound B2B lead, checks what the company actually builds on GitHub, scores fit from 1 to 5 with an LLM, and saves the result to Postgres. It was designed around what a GTM engineer at a developer-infrastructure company does: enrichment, scoring, hygiene, and keeping the outbound engine running without manual work.
 
