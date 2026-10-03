@@ -1,34 +1,3 @@
-# secrets and local config
 .env
-*.env.*
-!.env.example
-
-# generated workflow JSON (built from build_workflow.py — never commit baked-in keys)
-workflows/lead-radar.json
-workflows/error-handler.json
-
-# eval output
 eval/results.csv
-
-# node deps
 node_modules/
-
-# python
-__pycache__/
-*.py[cod]
-.venv/
-
-# scratch / debug files
-scratch.py
-setup_n8n.py
-test_login.py
-payload.json
-creds.json
-creds_backup.json
-export.json
-all-workflows.json
-*-workflows.json
-
-# OS
-.DS_Store
-Thumbs.db

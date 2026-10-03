@@ -6,6 +6,7 @@ This script inlines them into importable workflow files. Run from anywhere:
     python3 workflows/build_workflow.py
 """
 import argparse
+import sys
 import json
 import os
 import uuid
@@ -80,6 +81,20 @@ def link(*pairs):
     return conns
 
 
+# "stored" comes from the Postgres node, never from the last node that ran (that is a HubSpot reply).
+# crm tells the caller what happened in HubSpot, including HubSpot's own error text when it rejects a write.
+RESPOND_OK_BODY = (
+    "={{ (() => { const r = $('Parse & Merge').item.json; "
+    "const ok = (n) => $(n).isExecuted && !$(n).first().json.error; "
+    "const err = (n) => String(($(n).first().json.error || {}).message || JSON.stringify($(n).first().json.error || '')).slice(0, 400); "
+    "let crm = 'skipped', crm_error = null; "
+    "if ($('Check Company Exists').isExecuted) { "
+    "const n = $('HubSpot Update').isExecuted ? 'HubSpot Update' : 'HubSpot Create'; "
+    "crm = ok(n) ? (n === 'HubSpot Update' ? 'updated' : 'created') : 'error'; if (crm === 'error') crm_error = err(n); } "
+    "else if ($('HubSpot Search').isExecuted) { crm = 'error'; crm_error = err('HubSpot Search'); } "
+    "return Object.assign({}, r, { stored: $('Upsert Lead').first().json.id !== undefined, crm, crm_error }); })() }}"
+)
+
 UPSERT_SQL = """INSERT INTO leads
   (domain, company, github_org, contact_name, contact_email, source, status,
    final_score, score_source, llm_score, llm_confidence, reason, opener,
@@ -131,7 +146,7 @@ PROVIDERS = {
 }
 
 
-def main_workflow(github_auth=False, provider="anthropic", model=None, hide_keyword_hits=False):
+def main_workflow(github_auth=False, provider="anthropic", model=None, hide_keyword_hits=False, icp=None):
     prov = PROVIDERS[provider]
     model = model or prov["model"]
     score_name = prov["node"]
@@ -146,6 +161,18 @@ def main_workflow(github_auth=False, provider="anthropic", model=None, hide_keyw
              {"respondWith": "json",
               "responseBody": "={{ { status: 'rejected', domain: $json.domain, errors: $json.errors } }}",
               "options": {"responseCode": 422}}, [660, 480]),
+        if_node("GitHub org known?", "={{ $json.github_org_explicit }}",
+                {"type": "boolean", "operation": "true", "singleValue": True}, "", [660, 200]),
+        node("Scrape Homepage", "n8n-nodes-base.httpRequest", 4.2,
+             {"method": "GET",
+              "url": "=https://{{ $json.domain }}",
+              "sendHeaders": True,
+              "headerParameters": {"parameters": [
+                  {"name": "User-Agent", "value": "devlead-radar/1.0 (lead enrichment; contact via github.com/devlead-radar)"}]},
+              "options": {"timeout": 10000,
+                          "response": {"response": {"neverError": True, "fullResponse": True}}}},
+             [880, 380], onError="continueRegularOutput"),
+        code("Extract GitHub Org", "05_extract_github.js", [1100, 380]),
         node("GitHub Repos", "n8n-nodes-base.httpRequest", 4.2,
              {"method": "GET",
               "url": "=https://api.github.com/orgs/{{ $json.github_org }}/repos?per_page=100&sort=pushed&type=public",
@@ -156,12 +183,12 @@ def main_workflow(github_auth=False, provider="anthropic", model=None, hide_keyw
                   {"name": "User-Agent", "value": "devlead-radar"}]},
               "options": {"timeout": 15000,
                           "response": {"response": {"neverError": True, "fullResponse": True}}}},
-             [660, 200], onError="continueRegularOutput"),
-        code("Compute Signals", "02_signals.js", [880, 200]),
+             [1320, 200], onError="continueRegularOutput"),
+        code("Compute Signals", "02_signals.js", [1540, 200], icp_config=icp),
         if_node("Enough data for AI?", "={{ $json.data_quality }}",
-                {"type": "string", "operation": "equals"}, "ok", [1100, 200]),
-        code("Build Prompt", "03_build_prompt.js", [1320, 120],
-             hide_keyword_hits=hide_keyword_hits),
+                {"type": "string", "operation": "equals"}, "ok", [1760, 200]),
+        code("Build Prompt", "03_build_prompt.js", [1980, 120],
+             hide_keyword_hits=hide_keyword_hits, icp_config=icp),
         node(score_name, "n8n-nodes-base.httpRequest", 4.2,
              {"method": "POST", "url": prov["url"],
               **({"authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth"} if prov.get("cred") else {}),
@@ -170,31 +197,76 @@ def main_workflow(github_auth=False, provider="anthropic", model=None, hide_keyw
               "sendBody": True, "specifyBody": "json",
               "jsonBody": prov["body"] % {"model": model},
               "options": {"timeout": 30000}},
-             [1540, 120], retryOnFail=True, maxTries=3, waitBetweenTries=prov["wait"],
+             [2200, 120], retryOnFail=True, maxTries=3, waitBetweenTries=prov["wait"],
              onError="continueRegularOutput",
              **({"credentials": {"httpHeaderAuth": prov["cred"]}} if prov.get("cred") else {})),
-        code("Parse & Merge", "04_parse_merge.js", [1760, 200]),
+        code("Parse & Merge", "04_parse_merge.js", [2420, 200], icp_config=icp),
         if_node("Hot lead?", "={{ $json.hot }}",
-                {"type": "boolean", "operation": "true", "singleValue": True}, "", [1980, 200]),
+                {"type": "boolean", "operation": "true", "singleValue": True}, "", [2640, 200]),
         node("Slack Alert", "n8n-nodes-base.httpRequest", 4.2,
              {"method": "POST", "url": "https://hooks.slack.com/services/REPLACE/ME/PLEASE",
               "sendBody": True, "specifyBody": "json",
               "jsonBody": "={{ JSON.stringify({ text: ':fire: Hot lead: ' + $json.company + ' (' + $json.domain + ') score ' + $json.final_score + '/5\\n' + ($json.reason || '') + ($json.needs_review ? '\\n:warning: LLM and rules disagree, review before outreach' : '') }) }}",
               "options": {}},
-             [2200, 100], disabled=True, onError="continueRegularOutput"),
+             [2860, 100], disabled=True, onError="continueRegularOutput"),
         node("Upsert Lead", "n8n-nodes-base.postgres", 2.5,
              {"operation": "executeQuery", "query": UPSERT_SQL,
               "options": {"queryReplacement": UPSERT_ARGS}},
-             [2420, 200], onError="continueRegularOutput",
+             [3080, 200], onError="continueRegularOutput",
              credentials={"postgres": {"id": "crm-postgres", "name": "CRM Postgres"}}),
+        if_node("Scored? sync to CRM", "={{ $('Parse & Merge').item.json.status === 'scored' }}",
+                {"type": "boolean", "operation": "true", "singleValue": True}, "", [3300, 200]),
+        node("HubSpot Search", "n8n-nodes-base.httpRequest", 4.2,
+             {"method": "POST",
+              "url": "https://api.hubapi.com/crm/v3/objects/companies/search",
+              "authentication": "genericCredentialType",
+              "genericAuthType": "httpHeaderAuth",
+              "sendHeaders": True,
+              "headerParameters": {"parameters": [{"name": "Content-Type", "value": "application/json"}]},
+              "sendBody": True,
+              "specifyBody": "json",
+              "jsonBody": "={{ JSON.stringify({ filterGroups: [{ filters: [{ propertyName: 'domain', operator: 'EQ', value: $('Parse & Merge').item.json.domain }] }], properties: ['domain'] }) }}"},
+             [3520, 200], retryOnFail=True, maxTries=3, waitBetweenTries=1000, onError="continueRegularOutput",
+             credentials={"httpHeaderAuth": {"id": "hubspot-auth", "name": "HubSpot token"}}),
+        if_node("HubSpot search ok?", "={{ $json.error === undefined && $json.total !== undefined }}",
+                {"type": "boolean", "operation": "true", "singleValue": True}, "", [3740, 200]),
+        # Number comparison: the right-hand side must be a real number 0, not "" (strict type validation
+        # fails with "Wrong type: '' is a string but was expecting a number" and the lead never reaches HubSpot).
+        if_node("Check Company Exists", "={{ $json.total }}",
+                {"type": "number", "operation": "gt"}, 0, [3960, 200]),
+        node("HubSpot Update", "n8n-nodes-base.httpRequest", 4.2,
+             {"method": "PATCH",
+              "url": "={{ 'https://api.hubapi.com/crm/v3/objects/companies/' + $('HubSpot Search').item.json.results[0].id }}",
+              "authentication": "genericCredentialType",
+              "genericAuthType": "httpHeaderAuth",
+              "sendHeaders": True,
+              "headerParameters": {"parameters": [{"name": "Content-Type", "value": "application/json"}]},
+              "sendBody": True,
+              "specifyBody": "json",
+              "jsonBody": "={{ JSON.stringify({ properties: { devlead_score: $('Parse & Merge').item.json.final_score, devlead_reason: $('Parse & Merge').item.json.reason, github_org: $('Parse & Merge').item.json.github_org } }) }}"},
+             [4180, 100], onError="continueRegularOutput",
+             credentials={"httpHeaderAuth": {"id": "hubspot-auth", "name": "HubSpot token"}}),
+        node("HubSpot Create", "n8n-nodes-base.httpRequest", 4.2,
+             {"method": "POST",
+              "url": "https://api.hubapi.com/crm/v3/objects/companies",
+              "authentication": "genericCredentialType",
+              "genericAuthType": "httpHeaderAuth",
+              "sendHeaders": True,
+              "headerParameters": {"parameters": [{"name": "Content-Type", "value": "application/json"}]},
+              "sendBody": True,
+              "specifyBody": "json",
+              "jsonBody": "={{ JSON.stringify({ properties: { domain: $('Parse & Merge').item.json.domain, name: $('Parse & Merge').item.json.company, devlead_score: $('Parse & Merge').item.json.final_score, devlead_reason: $('Parse & Merge').item.json.reason, github_org: $('Parse & Merge').item.json.github_org } }) }}"},
+             [4180, 300], onError="continueRegularOutput",
+             credentials={"httpHeaderAuth": {"id": "hubspot-auth", "name": "HubSpot token"}}),
         node("Respond OK", "n8n-nodes-base.respondToWebhook", 1.1,
              {"respondWith": "json",
-              "responseBody": "={{ Object.assign({}, $('Parse & Merge').item.json, { stored: $json.id !== undefined }) }}",
+              "responseBody": RESPOND_OK_BODY,
               "options": {"responseCode": 200}},
-             [2640, 200]),
-        note("## Lead Radar\nPOST a lead to /webhook/lead-intake.\nValidate -> GitHub signals -> rule score -> Claude score -> upsert to Postgres -> reply with the result.", [-20, 60], 360, 160),
-        note("Leads with no usable GitHub data skip the LLM call on purpose, so the model never has to guess.", [1060, 340], 300, 100),
-        note("The model call retries 3x. If it still fails, or returns junk, the rule score is used and the row says so (score_source = rules_fallback).", [1300, -80], 340, 110),
+             [4400, 200]),
+        note("## Lead Radar\nPOST a lead to /webhook/lead-intake.\nValidate -> GitHub org check -> GitHub signals -> rule score -> LLM score -> upsert to Postgres -> reply.", [-20, 60], 400, 160),
+        note("If github_org is blank, the pipeline scrapes the homepage to discover it before calling the GitHub API.", [640, 500], 340, 100),
+        note("Leads with no usable GitHub data skip the LLM call on purpose, so the model never has to guess.", [1720, 340], 300, 100),
+        note("The model call retries 3x. If it still fails, or returns junk, the rule score is used and the row says so (score_source = rules_fallback).", [1960, -80], 340, 110),
     ]
     if github_auth:
         gh = next(n for n in nodes if n["name"] == "GitHub Repos")
@@ -204,8 +276,12 @@ def main_workflow(github_auth=False, provider="anthropic", model=None, hide_keyw
     connections = link(
         ("Lead Intake", "Normalize & Validate"),
         ("Normalize & Validate", "Valid lead?"),
-        ("Valid lead?", "GitHub Repos", 0),
+        ("Valid lead?", "GitHub org known?", 0),
         ("Valid lead?", "Respond Rejected", 1),
+        ("GitHub org known?", "GitHub Repos", 0),       # org already known -> go straight to API
+        ("GitHub org known?", "Scrape Homepage", 1),    # org missing -> scrape first
+        ("Scrape Homepage", "Extract GitHub Org"),
+        ("Extract GitHub Org", "GitHub Repos"),          # rejoin main path
         ("GitHub Repos", "Compute Signals"),
         ("Compute Signals", "Enough data for AI?"),
         ("Enough data for AI?", "Build Prompt", 0),
@@ -216,7 +292,16 @@ def main_workflow(github_auth=False, provider="anthropic", model=None, hide_keyw
         ("Hot lead?", "Slack Alert", 0),
         ("Hot lead?", "Upsert Lead", 1),
         ("Slack Alert", "Upsert Lead"),
-        ("Upsert Lead", "Respond OK"),
+        ("Upsert Lead", "Scored? sync to CRM"),
+        ("Scored? sync to CRM", "HubSpot Search", 0),
+        ("Scored? sync to CRM", "Respond OK", 1),         # unscored leads stay out of the CRM
+        ("HubSpot Search", "HubSpot search ok?"),
+        ("HubSpot search ok?", "Check Company Exists", 0),
+        ("HubSpot search ok?", "Respond OK", 1),          # search failed: do not guess, do not create
+        ("Check Company Exists", "HubSpot Update", 0),
+        ("Check Company Exists", "HubSpot Create", 1),
+        ("HubSpot Update", "Respond OK"),
+        ("HubSpot Create", "Respond OK"),
     )
     return {"id": "leadRadarMain0001", "name": "Lead Radar: enrich and score", "nodes": nodes, "connections": connections,
             "active": False, "settings": {"executionOrder": "v1"}, "pinData": {}}
@@ -254,10 +339,22 @@ if __name__ == "__main__":
     ap.add_argument("--model", help="override the provider's default model id")
     ap.add_argument("--github-auth", action="store_true",
                     help="use a Header Auth credential named 'GitHub token' (Authorization: Bearer <pat>)")
+    ap.add_argument("--out-dir", default=str(ROOT / "workflows"),
+                    help="where to write lead-radar.json and error-handler.json (default: workflows/)")
+    ap.add_argument("--icp", default=str(ROOT / "config" / "icp.dev-infra.toml"),
+                    help="ICP config file (default: config/icp.dev-infra.toml)")
     ap.add_argument("--hide-keyword-hits", action="store_true",
                     help="experiment: omit keyword_hits from the facts sent to the model")
     args = ap.parse_args()
-    out = ROOT / "workflows"
-    for fname, wf in [("lead-radar.json", main_workflow(args.github_auth, args.provider, args.model, args.hide_keyword_hits)), ("error-handler.json", error_workflow())]:
+    sys.path.insert(0, str(ROOT / "workflows"))
+    import icp_config
+    try:
+        icp = icp_config.load(args.icp)
+    except (icp_config.ConfigError, OSError) as e:
+        sys.exit(f"config error: {e}")
+    print(f"ICP: {icp['name']}@{icp['hash']} ({args.icp})")
+    out = Path(args.out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    for fname, wf in [("lead-radar.json", main_workflow(args.github_auth, args.provider, args.model, args.hide_keyword_hits, icp)), ("error-handler.json", error_workflow())]:
         (out / fname).write_text(json.dumps(wf, indent=2) + "\n")
         print("wrote", fname, len(wf["nodes"]), "nodes")

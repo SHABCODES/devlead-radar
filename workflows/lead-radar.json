@@ -1,0 +1,982 @@
+{
+  "id": "leadRadarMain0001",
+  "name": "Lead Radar: enrich and score",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead-intake",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "d7075d23-4729-5ba9-a0b7-c0161f47d8f8",
+      "name": "Lead Intake",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "17bb1251-1c81-5e8b-ad61-f65516b14fb8"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Normalize & Validate: runs once per item.\n// Input: the raw webhook payload. Output: a clean lead plus a `valid` flag.\nconst FREEMAIL = new Set([\n  'gmail.com', 'yahoo.com', 'outlook.com', 'hotmail.com',\n  'proton.me', 'protonmail.com', 'icloud.com', 'aol.com',\n]);\nconst body = $json.body || $json;\nconst str = (v) => (typeof v === 'string' ? v.trim() : '');\nconst errors = [];\n\nconst company = str(body.company);\nif (!company) errors.push('company is required');\n\n// \"https://www.Fly.io/pricing?x=1\" -> \"fly.io\"\nconst domain = str(body.domain)\n  .toLowerCase()\n  .replace(/^https?:\\/\\//, '')\n  .replace(/^www\\./, '')\n  .split('/')[0]\n  .split('?')[0];\nif (!/^[a-z0-9-]+(\\.[a-z0-9-]+)+$/.test(domain)) {\n  errors.push('domain is missing or not a valid hostname');\n}\n\n// GitHub org: explicit value wins. If not provided, record that so the\n// downstream scrape branch can try to find the real org from the homepage.\n// We still derive a best-guess from the domain as a last-resort fallback,\n// but we mark it so the pipeline knows to scrape first.\nconst explicitOrg = str(body.github_org).toLowerCase();\nlet githubOrg = explicitOrg;\nlet githubOrgExplicit = !!explicitOrg;\nif (!githubOrg && domain) githubOrg = domain.split('.')[0];\nif (!/^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/.test(githubOrg)) {\n  errors.push('could not derive a valid GitHub org name');\n}\n\n// Email is optional, but if present it has to look real.\nconst email = str(body.contact_email).toLowerCase();\nlet emailFreemail = false;\nlet emailDomainMatch = null;\nif (email) {\n  if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) {\n    errors.push('contact_email is not a valid address');\n  } else {\n    const emailDomain = email.split('@')[1];\n    emailFreemail = FREEMAIL.has(emailDomain);\n    emailDomainMatch = emailDomain === domain || emailDomain.endsWith('.' + domain);\n  }\n}\n\nreturn {\n  json: {\n    valid: errors.length === 0,\n    errors,\n    company,\n    domain,\n    // If the caller provided an explicit org, use it directly.\n    // If not, set github_org to null so the scrape branch fires.\n    // The domain-derived guess is kept as a hint of last resort in 05_extract_github.js.\n    github_org: githubOrgExplicit ? githubOrg : null,\n    github_org_hint: githubOrgExplicit ? null : githubOrg,\n    github_org_explicit: githubOrgExplicit,\n    contact_name: str(body.contact_name) || null,\n    contact_email: email || null,\n    source: str(body.source) || 'unknown',\n    email_freemail: emailFreemail,\n    email_domain_match: emailDomainMatch,\n    received_at: new Date().toISOString(),\n  },\n};\n"
+      },
+      "id": "c25e8aab-0ccf-5a11-9c07-945ab59f626f",
+      "name": "Normalize & Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "fbf76576-569f-57e5-8092-bbd0f79a386c",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "15f0614e-5573-5ebb-a961-c5ff5c1a1008",
+      "name": "Valid lead?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'rejected', domain: $json.domain, errors: $json.errors } }}",
+        "options": {
+          "responseCode": 422
+        }
+      },
+      "id": "5dcf0b37-00c2-53c1-bca7-3b7034a04630",
+      "name": "Respond Rejected",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "96c84a1f-22c8-511f-bb1c-44fa1fa3e066",
+              "leftValue": "={{ $json.github_org_explicit }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e7cde94b-6c3d-57f5-9fd3-53f13582477d",
+      "name": "GitHub org known?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://{{ $json.domain }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "devlead-radar/1.0 (lead enrichment; contact via github.com/devlead-radar)"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000,
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "547c6c55-7e30-5dad-a4fc-e2a987d7bc5d",
+      "name": "Scrape Homepage",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        380
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Extract GitHub Org: runs only when github_org was not given in the request.\n// The previous HTTP Request node fetched the company homepage. Its output holds only the\n// HTTP response ($json.body), NOT the lead, so the lead is read back from \"Normalize & Validate\".\n//\n// We scan the HTML for github.com/<org> links, keep only orgs that look like they belong to\n// THIS company (name or domain match), and pick the most cited. A page that links to\n// github.com/actions/checkout three times must not make \"actions\" the lead's org.\n// If nothing matches, fall back to the domain-derived hint (source = domain_hint).\n\nconst resp = $json;\nlet lead = {};\ntry { lead = $('Normalize & Validate').item.json; } catch (e) { lead = {}; }\n\nconst html = (typeof resp.body === 'string' ? resp.body : '') +\n             (typeof resp.data === 'string' ? resp.data : '');\n\n// Top-level github.com paths that are GitHub's own pages, not organizations.\nconst RESERVED = new Set(['about', 'advisories', 'apps', 'blog', 'codespaces', 'collections',\n  'contact', 'copilot', 'customer-stories', 'discussions', 'enterprise', 'events', 'explore',\n  'features', 'github', 'issues', 'join', 'login', 'marketplace', 'mobile', 'new',\n  'notifications', 'organizations', 'orgs', 'pricing', 'pulls', 'readme', 'resources',\n  'search', 'security', 'sessions', 'settings', 'signup', 'site', 'solutions', 'sponsors',\n  'stars', 'team', 'teams', 'topics', 'trending', 'users', 'watching', 'why-github']);\n\nconst norm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]/g, '');\n\n// Name-like words for this company: the domain's main label and the company name.\nfunction companyLabels(domain, company) {\n  const parts = String(domain || '').toLowerCase().replace(/^www\\./, '').split('.').filter(Boolean);\n  let sld = parts.length >= 2 ? parts[parts.length - 2] : (parts[0] || '');\n  if (['co', 'com', 'org', 'net', 'ac', 'gov', 'edu'].includes(sld) && parts.length >= 3) sld = parts[parts.length - 3];\n  return [norm(sld), norm(company)].filter((l) => l.length >= 3);\n}\n\nfunction related(org, labels) {\n  const o = norm(org);\n  return labels.some((l) => {\n    if (o.includes(l)) return true;                       // e2b-dev contains e2b\n    if (o.length >= 4 && l.includes(o)) return true;      // datadog in datadoghq\n    let i = 0;\n    while (i < o.length && i < l.length && o[i] === l[i]) i++;\n    return i >= 5 && i / Math.min(o.length, l.length) >= 0.6;  // cockroachdb ~ cockroachlabs\n  });\n}\n\nconst ORG = '([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?)';\n// (?:^|[^a-zA-Z0-9.-]) keeps out look-alikes such as notgithub.com and gist.github.com.\nconst PREFIX = '(?:^|[^a-zA-Z0-9.-])(?:www\\\\.)?github\\\\.com\\\\/';\nconst patterns = [\n  new RegExp(PREFIX + '(?:orgs|sponsors)\\\\/' + ORG, 'g'),  // github.com/orgs/<org>, /sponsors/<org>\n  new RegExp(PREFIX + ORG, 'g'),                            // github.com/<org>\n];\n\nconst counts = {};\nfor (const re of patterns) {\n  let m;\n  while ((m = re.exec(html)) !== null) {\n    const org = m[1].toLowerCase();\n    if (!RESERVED.has(org)) counts[org] = (counts[org] || 0) + 1;\n  }\n}\n\nconst labels = companyLabels(lead.domain, lead.company);\nconst best = Object.entries(counts)\n  .filter(([org]) => related(org, labels))\n  .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0];\nconst discovered = best ? best[0] : null;\n\n// Last resort: the domain-derived hint from the normalizer, so we still try the GitHub API.\nconst hint = lead.github_org_hint || null;\nconst resolvedOrg = discovered || hint || null;\nconst resolvedSource = discovered ? 'scraped' : (hint ? 'domain_hint' : 'unknown');\n\nreturn {\n  json: {\n    ...lead,\n    github_org: resolvedOrg,\n    github_source: resolvedSource,\n  },\n};\n"
+      },
+      "id": "daaee1cb-6e9b-5d3b-a47c-e907ca3f2863",
+      "name": "Extract GitHub Org",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.github.com/orgs/{{ $json.github_org }}/repos?per_page=100&sort=pushed&type=public",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            },
+            {
+              "name": "X-GitHub-Api-Version",
+              "value": "2022-11-28"
+            },
+            {
+              "name": "User-Agent",
+              "value": "devlead-radar"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "8bf573c1-0dc7-59c1-ae78-7bb07362378b",
+      "name": "GitHub Repos",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        200
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "1a7eniFZ2Fn9lvdc",
+          "name": "GitHub token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Compute Signals: runs once per item, after the GitHub HTTP call.\n// Turns the raw repo list into a few facts and a deterministic baseline score.\n\n// When the scrape fallback branch ran, Extract GitHub Org has the real github_org and github_source.\n// When the direct branch ran, that node was never executed, so we fall back to Normalize & Validate.\nlet lead = $('Normalize & Validate').item.json;\ntry {\n  const scraped = $('Extract GitHub Org').item.json;\n  if (scraped && scraped.github_org) {\n    lead = { ...lead, github_org: scraped.github_org, github_source: scraped.github_source };\n  }\n} catch (e) { /* direct path: Extract GitHub Org did not run this execution */ }\n\nconst res = $json;\n\n// ICP settings come from config/*.toml; build_workflow.py writes them in at build time.\nconst ICP = {\"name\": \"dev-infra\", \"description\": \"Developer-infrastructure buyers: cloud, serverless, sandboxed compute (v1 default, the Unikraft-style ICP).\", \"scoring\": {\"tier_cutoffs\": [10, 25, 45, 65], \"points_per_active_repo\": 5, \"hot_threshold\": 4, \"review_gap\": 2, \"caps\": {\"activity\": 25, \"keywords\": 40, \"languages\": 15, \"traction\": 20}}, \"keywords\": {\"unikernel\": 15, \"hypervisor\": 10, \"microvm\": 12, \"firecracker\": 12, \"serverless\": 8, \"wasm\": 8, \"webassembly\": 8, \"sandbox\": 6, \"paas\": 6, \"ebpf\": 6, \"kubernetes\": 6, \"k8s\": 6, \"container\": 5, \"docker\": 4, \"runtime\": 4, \"edge\": 4, \"infrastructure\": 4, \"cloud\": 3, \"observability\": 3, \"rust\": 3}, \"languages\": {\"Rust\": 6, \"Go\": 6, \"C\": 6, \"C++\": 5, \"Zig\": 4, \"TypeScript\": 2, \"Python\": 2}, \"prompt\": {\"product\": \"Unikraft sells a cloud platform built around unikernels: millisecond boot times, high density, low cost per instance.\", \"good_fit\": \"Good-fit companies build or run infrastructure, developer platforms, serverless or edge compute, sandboxed code execution (CI, AI agent sandboxes), or any workload where cold starts and compute cost matter.\", \"poor_fit\": \"Poor-fit companies mainly use software rather than build infrastructure (retail, consulting, banks, manufacturers).\", \"top_of_scale\": \"strong fit with visible infrastructure work\"}, \"hash\": \"06d5dbab\"};\nconst KEYWORDS = ICP.keywords;\nconst LANGUAGES = ICP.languages;\nconst TIER_CUTOFFS = ICP.scoring.tier_cutoffs; // rule_score below each cutoff -> tier 1..4, else 5\nconst CAPS = ICP.scoring.caps;\n\nconst status = typeof res.statusCode === 'number' ? res.statusCode : 0;\nconst repos = status === 200 && Array.isArray(res.body) ? res.body : [];\nconst own = repos.filter((r) => !r.fork && !r.archived);\n\nlet dataQuality;\nif (status === 200) dataQuality = own.length > 0 ? 'ok' : 'no_repos';\nelse if (status === 404) dataQuality = 'no_github';\nelse if (status === 403 || status === 429) dataQuality = 'rate_limited';\nelse dataQuality = 'error';\n\nconst cutoff = Date.now() - 90 * 24 * 3600 * 1000;\nconst active90 = own.filter((r) => r.pushed_at && Date.parse(r.pushed_at) >= cutoff);\nconst starsTotal = own.reduce((n, r) => n + (r.stargazers_count || 0), 0);\n\nconst langCount = {};\nfor (const r of own) if (r.language) langCount[r.language] = (langCount[r.language] || 0) + 1;\nconst topLanguages = Object.entries(langCount)\n  .sort((a, b) => b[1] - a[1])\n  .slice(0, 3)\n  .map(([name]) => name);\n\nconst text = own\n  .map((r) => [r.name, r.description || '', ...(r.topics || [])].join(' '))\n  .join(' ')\n  .toLowerCase();\nconst keywordHits = Object.keys(KEYWORDS).filter((k) =>\n  new RegExp('\\\\b' + k + 's?\\\\b').test(text));\n\nconst topRepos = [...own]\n  .sort((a, b) => (b.stargazers_count || 0) - (a.stargazers_count || 0))\n  .slice(0, 3)\n  .map((r) => ({\n    name: r.name,\n    stars: r.stargazers_count || 0,\n    description: (r.description || '').slice(0, 120),\n  }));\n\nconst activityPts = Math.min(CAPS.activity, active90.length * ICP.scoring.points_per_active_repo);\nconst keywordPts = Math.min(CAPS.keywords, keywordHits.reduce((n, k) => n + KEYWORDS[k], 0));\nconst languagePts = Math.min(CAPS.languages, topLanguages.reduce((n, l) => n + (LANGUAGES[l] || 0), 0));\nconst tractionPts = Math.min(CAPS.traction, Math.round(Math.log10(starsTotal + 1) * 5));\nconst ruleScore = dataQuality === 'ok' ? activityPts + keywordPts + languagePts + tractionPts : 0;\nconst ruleTier = TIER_CUTOFFS.filter((c) => ruleScore >= c).length + 1;\n\nreturn {\n  json: {\n    ...lead,\n    github_status: status,\n    data_quality: dataQuality,\n    signals: {\n      original_repos: own.length,\n      active_repos_90d: active90.length,\n      stars_total: starsTotal,\n      top_languages: topLanguages,\n      keyword_hits: keywordHits,\n      top_repos: topRepos,\n    },\n    rule_breakdown: { activityPts, keywordPts, languagePts, tractionPts },\n    rule_score: ruleScore,\n    rule_tier: ruleTier,\n  },\n};\n"
+      },
+      "id": "3d7984ae-550c-5d39-8aea-c694cdf3d947",
+      "name": "Compute Signals",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3e112c0d-a429-54c6-9c77-7c1f5dce0155",
+              "leftValue": "={{ $json.data_quality }}",
+              "rightValue": "ok",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "10f7b622-cf7c-567a-8c19-88518551f0af",
+      "name": "Enough data for AI?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1760,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Build Prompt: runs once per item. Only leads with real GitHub data get here.\nconst s = $json;\n\n// ICP settings come from config/*.toml; build_workflow.py writes them in at build time.\nconst ICP = {\"name\": \"dev-infra\", \"description\": \"Developer-infrastructure buyers: cloud, serverless, sandboxed compute (v1 default, the Unikraft-style ICP).\", \"scoring\": {\"tier_cutoffs\": [10, 25, 45, 65], \"points_per_active_repo\": 5, \"hot_threshold\": 4, \"review_gap\": 2, \"caps\": {\"activity\": 25, \"keywords\": 40, \"languages\": 15, \"traction\": 20}}, \"keywords\": {\"unikernel\": 15, \"hypervisor\": 10, \"microvm\": 12, \"firecracker\": 12, \"serverless\": 8, \"wasm\": 8, \"webassembly\": 8, \"sandbox\": 6, \"paas\": 6, \"ebpf\": 6, \"kubernetes\": 6, \"k8s\": 6, \"container\": 5, \"docker\": 4, \"runtime\": 4, \"edge\": 4, \"infrastructure\": 4, \"cloud\": 3, \"observability\": 3, \"rust\": 3}, \"languages\": {\"Rust\": 6, \"Go\": 6, \"C\": 6, \"C++\": 5, \"Zig\": 4, \"TypeScript\": 2, \"Python\": 2}, \"prompt\": {\"product\": \"Unikraft sells a cloud platform built around unikernels: millisecond boot times, high density, low cost per instance.\", \"good_fit\": \"Good-fit companies build or run infrastructure, developer platforms, serverless or edge compute, sandboxed code execution (CI, AI agent sandboxes), or any workload where cold starts and compute cost matter.\", \"poor_fit\": \"Poor-fit companies mainly use software rather than build infrastructure (retail, consulting, banks, manufacturers).\", \"top_of_scale\": \"strong fit with visible infrastructure work\"}, \"hash\": \"06d5dbab\"};\nconst icpText = [ICP.prompt.product, ICP.prompt.good_fit, ICP.prompt.poor_fit].join(' ');\n\nconst system = [\n  'You score inbound B2B leads for a sales team. You only use the facts provided.',\n  'Never invent products, customers, funding, headcount or numbers that are not in the facts.',\n  'Ideal customer profile: ' + icpText,\n  'Reply with one JSON object and nothing else, using exactly these keys:',\n  '{\"score\": integer 1-5, \"confidence\": \"low\"|\"medium\"|\"high\", \"reason\": string (max 25 words, cite the facts used),',\n  '\"opener\": string (max 30 words, a plain first line for a cold email that references one real fact, no flattery)}',\n  'Scale: 1 = clearly not a fit, 3 = unclear, 5 = ' + ICP.prompt.top_of_scale + '.',\n].join('\\n');\n\n// false is substituted at build time by build_workflow.py.\n// Set to true with --hide-keyword-hits to test whether the model judges better\n// from repo names/descriptions alone, without the rule-stage keyword list.\nconst hideKeywordHits = false;\n\nconst { keyword_hits: _dropped, ...signalsWithout } = s.signals;\nconst facts = {\n  company: s.company,\n  domain: s.domain,\n  github_org: s.github_org,\n  ...(hideKeywordHits ? signalsWithout : s.signals),\n};\n\n// Provider-neutral: the HTTP node wraps these in the right request shape (Claude or Groq).\nreturn {\n  json: {\n    ...s,\n    llm_system: system,\n    llm_user: 'Lead facts:\\n' + JSON.stringify(facts, null, 2),\n  },\n};\n"
+      },
+      "id": "9acf35f9-79b2-5506-8e4e-fb0938eeb1ad",
+      "name": "Build Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": false,
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'openai/gpt-oss-120b', max_tokens: 1024, temperature: 0, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: $json.llm_system }, { role: 'user', content: $json.llm_user }] }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "7bad9964-5c20-5c4e-b027-93d118a728af",
+      "name": "Groq Score",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        120
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 6000,
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "groq-key",
+          "name": "Groq API key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Parse & Merge: runs once per item. Combines the LLM answer with the rule score\n// and never lets a bad model response break the pipeline.\n// ICP settings come from config/*.toml; build_workflow.py writes them in at build time.\nconst ICP = {\"name\": \"dev-infra\", \"description\": \"Developer-infrastructure buyers: cloud, serverless, sandboxed compute (v1 default, the Unikraft-style ICP).\", \"scoring\": {\"tier_cutoffs\": [10, 25, 45, 65], \"points_per_active_repo\": 5, \"hot_threshold\": 4, \"review_gap\": 2, \"caps\": {\"activity\": 25, \"keywords\": 40, \"languages\": 15, \"traction\": 20}}, \"keywords\": {\"unikernel\": 15, \"hypervisor\": 10, \"microvm\": 12, \"firecracker\": 12, \"serverless\": 8, \"wasm\": 8, \"webassembly\": 8, \"sandbox\": 6, \"paas\": 6, \"ebpf\": 6, \"kubernetes\": 6, \"k8s\": 6, \"container\": 5, \"docker\": 4, \"runtime\": 4, \"edge\": 4, \"infrastructure\": 4, \"cloud\": 3, \"observability\": 3, \"rust\": 3}, \"languages\": {\"Rust\": 6, \"Go\": 6, \"C\": 6, \"C++\": 5, \"Zig\": 4, \"TypeScript\": 2, \"Python\": 2}, \"prompt\": {\"product\": \"Unikraft sells a cloud platform built around unikernels: millisecond boot times, high density, low cost per instance.\", \"good_fit\": \"Good-fit companies build or run infrastructure, developer platforms, serverless or edge compute, sandboxed code execution (CI, AI agent sandboxes), or any workload where cold starts and compute cost matter.\", \"poor_fit\": \"Poor-fit companies mainly use software rather than build infrastructure (retail, consulting, banks, manufacturers).\", \"top_of_scale\": \"strong fit with visible infrastructure work\"}, \"hash\": \"06d5dbab\"};\nconst s = $('Compute Signals').item.json;\nconst githubSource = s.github_source || 'provided';\nconst res = $json;\n\nfunction extractJson(text) {\n  if (typeof text !== 'string') return null;\n  const t = text.replace(/```(?:json)?/gi, '');\n  const a = t.indexOf('{');\n  const b = t.lastIndexOf('}');\n  if (a === -1 || b <= a) return null;\n  try { return JSON.parse(t.slice(a, b + 1)); } catch (e) { return null; }\n}\n\nfunction validate(o) {\n  if (!o || typeof o !== 'object') return null;\n  const score = Math.round(Number(o.score));\n  if (!Number.isFinite(score) || score < 1 || score > 5) return null;\n  const confidence = ['low', 'medium', 'high'].includes(o.confidence) ? o.confidence : 'low';\n  const reason = typeof o.reason === 'string' ? o.reason.trim().slice(0, 300) : '';\n  let opener = typeof o.opener === 'string' ? o.opener.trim().slice(0, 300) : '';\n  // Grounding check: every number in the opener must appear in the facts we sent.\n  const factsText = JSON.stringify(s.signals);\n  const numbers = opener.match(/\\d[\\d,.]*/g) || [];\n  const grounded = numbers.every((n) => factsText.includes(n.replace(/[.,]$/, '')));\n  if (!grounded) opener = '';\n  return { score, confidence, reason, opener: opener || null, opener_dropped: !grounded };\n}\n\nlet llm = null;\nlet llmStatus = 'skipped';\nlet parseHint = '';\nif (s.data_quality === 'ok') {\n  // Groq / OpenAI-style: choices[0].message.content. Claude: content[0].text.\n  const text =\n    (res && res.choices && res.choices[0] && res.choices[0].message && res.choices[0].message.content) ||\n    (res && res.content && res.content[0] && res.content[0].text) ||\n    '';\n  llm = validate(extractJson(text));\n  const fin = res && res.choices && res.choices[0] && res.choices[0].finish_reason;\n  parseHint = 'finish_reason=' + (fin || 'n/a') + ' text=' + String(text).slice(0, 120);\n  if (llm) llmStatus = 'ok';\n  else if (res && (res.error || res.type === 'error')) llmStatus = 'api_error';\n  else llmStatus = 'parse_error';\n}\n\n// Short, single-line error text for debugging. Never stored in the database.\nlet llmError = null;\nif (llmStatus === 'api_error') {\n  const e = res.error;\n  const msg = (e && (e.message || (typeof e === 'string' ? e : ''))) || res.message || 'unknown error';\n  llmError = String(msg).replace(/\\s+/g, ' ').slice(0, 200);\n} else if (llmStatus === 'parse_error') {\n  llmError = parseHint.replace(/\\s+/g, ' ').slice(0, 200);\n}\n\nlet status;\nlet finalScore = null;\nlet scoreSource = null;\nif (s.data_quality === 'ok') {\n  status = 'scored';\n  finalScore = llm ? llm.score : s.rule_tier;\n  scoreSource = llm ? 'llm' : 'rules_fallback';\n} else if (s.data_quality === 'no_github' || s.data_quality === 'no_repos') {\n  status = 'no_github_data';\n} else {\n  status = 'needs_retry';\n}\n\nconst needsReview = !!llm && Math.abs(llm.score - s.rule_tier) >= ICP.scoring.review_gap;\n\n// Usage for cost tracking. Groq/OpenAI: prompt_tokens/completion_tokens. Claude: input_tokens/output_tokens.\n// Only the final successful attempt is counted; tokens from retried failures are not visible here.\nconst usage = (res && res.usage) || {};\nconst tokensIn = Number(usage.prompt_tokens != null ? usage.prompt_tokens : usage.input_tokens) || null;\nconst tokensOut = Number(usage.completion_tokens != null ? usage.completion_tokens : usage.output_tokens) || null;\nconst llmModel = res && typeof res.model === 'string' ? res.model : null;\n\nreturn {\n  json: {\n    company: s.company,\n    domain: s.domain,\n    github_org: s.github_org,\n    github_source: githubSource,\n    contact_name: s.contact_name,\n    contact_email: s.contact_email,\n    source: s.source,\n    email_freemail: s.email_freemail,\n    status,\n    final_score: finalScore,\n    score_source: scoreSource,\n    llm_status: llmStatus,\n    llm_error: llmError,\n    llm_model: llmModel,\n    llm_tokens_in: tokensIn,\n    llm_tokens_out: tokensOut,\n    llm_score: llm ? llm.score : null,\n    llm_confidence: llm ? llm.confidence : null,\n    reason: llm ? llm.reason : null,\n    opener: llm ? llm.opener : null,\n    opener_dropped: llm ? llm.opener_dropped : false,\n    rule_score: s.rule_score,\n    rule_tier: s.rule_tier,\n    needs_review: needsReview,\n    hot: finalScore !== null && finalScore >= ICP.scoring.hot_threshold,\n    icp: ICP.name + '@' + ICP.hash,\n    signals: s.signals,\n  },\n};\n"
+      },
+      "id": "57792b84-9b26-50b9-ac05-26bee3ee2791",
+      "name": "Parse & Merge",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "eb5f1d3b-667a-5b1e-bb67-bff598ba33eb",
+              "leftValue": "={{ $json.hot }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f3a4f7a3-5707-5444-adf0-8c23d976741b",
+      "name": "Hot lead?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2640,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://hooks.slack.com/services/REPLACE/ME/PLEASE",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: ':fire: Hot lead: ' + $json.company + ' (' + $json.domain + ') score ' + $json.final_score + '/5\\n' + ($json.reason || '') + ($json.needs_review ? '\\n:warning: LLM and rules disagree, review before outreach' : '') }) }}",
+        "options": {}
+      },
+      "id": "be29d101-7d37-5869-8824-7034dd0965fa",
+      "name": "Slack Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        100
+      ],
+      "disabled": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO leads\n  (domain, company, github_org, contact_name, contact_email, source, status,\n   final_score, score_source, llm_score, llm_confidence, reason, opener,\n   rule_score, rule_tier, needs_review, signals)\nVALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17::jsonb)\nON CONFLICT (domain) DO UPDATE SET\n  company = EXCLUDED.company, github_org = EXCLUDED.github_org,\n  contact_name = COALESCE(EXCLUDED.contact_name, leads.contact_name),\n  contact_email = COALESCE(EXCLUDED.contact_email, leads.contact_email),\n  source = EXCLUDED.source, status = EXCLUDED.status,\n  final_score = EXCLUDED.final_score, score_source = EXCLUDED.score_source,\n  llm_score = EXCLUDED.llm_score, llm_confidence = EXCLUDED.llm_confidence,\n  reason = EXCLUDED.reason, opener = EXCLUDED.opener,\n  rule_score = EXCLUDED.rule_score, rule_tier = EXCLUDED.rule_tier,\n  needs_review = EXCLUDED.needs_review, signals = EXCLUDED.signals,\n  updated_at = now()\nRETURNING id, (xmax = 0) AS inserted;",
+        "options": {
+          "queryReplacement": "={{ (() => { const l = $('Parse & Merge').item.json; return [l.domain, l.company, l.github_org, l.contact_name, l.contact_email, l.source, l.status, l.final_score, l.score_source, l.llm_score, l.llm_confidence, l.reason, l.opener, l.rule_score, l.rule_tier, l.needs_review, JSON.stringify(l.signals)]; })() }}"
+        }
+      },
+      "id": "ef744b47-8eab-5a66-9f0c-400543c62526",
+      "name": "Upsert Lead",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3080,
+        200
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "postgres": {
+          "id": "crm-postgres",
+          "name": "CRM Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "997e5570-ca29-52a6-b6ff-563c5419fa23",
+              "leftValue": "={{ $('Parse & Merge').item.json.status === 'scored' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e5deee29-ac8c-587d-b85b-884a79510d80",
+      "name": "Scored? sync to CRM",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3300,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/companies/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ filterGroups: [{ filters: [{ propertyName: 'domain', operator: 'EQ', value: $('Parse & Merge').item.json.domain }] }], properties: ['domain'] }) }}"
+      },
+      "id": "35a9965e-edd5-5a51-a164-e816ee1faa4f",
+      "name": "HubSpot Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3520,
+        200
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "hubspot-auth",
+          "name": "HubSpot token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "31cc5c68-7463-597b-befb-4a323e164171",
+              "leftValue": "={{ $json.error === undefined && $json.total !== undefined }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "0d93c67d-2f5a-5b30-912e-89ef7284b9ff",
+      "name": "HubSpot search ok?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3740,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "407e2e04-ebb9-5458-b150-50eb6c09d3f2",
+              "leftValue": "={{ $json.total }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "8b903625-05ba-5b3b-b978-f07a40193e14",
+      "name": "Check Company Exists",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3960,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'https://api.hubapi.com/crm/v3/objects/companies/' + $('HubSpot Search').item.json.results[0].id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ properties: { devlead_score: $('Parse & Merge').item.json.final_score, devlead_reason: $('Parse & Merge').item.json.reason, github_org: $('Parse & Merge').item.json.github_org } }) }}"
+      },
+      "id": "632ddbd6-d7df-5269-be9c-bf4254e03a7e",
+      "name": "HubSpot Update",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4180,
+        100
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "hubspot-auth",
+          "name": "HubSpot token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/companies",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ properties: { domain: $('Parse & Merge').item.json.domain, name: $('Parse & Merge').item.json.company, devlead_score: $('Parse & Merge').item.json.final_score, devlead_reason: $('Parse & Merge').item.json.reason, github_org: $('Parse & Merge').item.json.github_org } }) }}"
+      },
+      "id": "ef9c5fef-8cfb-59ed-a956-03cde3e5a1f7",
+      "name": "HubSpot Create",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4180,
+        300
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "hubspot-auth",
+          "name": "HubSpot token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ (() => { const r = $('Parse & Merge').item.json; const ok = (n) => $(n).isExecuted && !$(n).first().json.error; const err = (n) => String(($(n).first().json.error || {}).message || JSON.stringify($(n).first().json.error || '')).slice(0, 400); let crm = 'skipped', crm_error = null; if ($('Check Company Exists').isExecuted) { const n = $('HubSpot Update').isExecuted ? 'HubSpot Update' : 'HubSpot Create'; crm = ok(n) ? (n === 'HubSpot Update' ? 'updated' : 'created') : 'error'; if (crm === 'error') crm_error = err(n); } else if ($('HubSpot Search').isExecuted) { crm = 'error'; crm_error = err('HubSpot Search'); } return Object.assign({}, r, { stored: $('Upsert Lead').first().json.id !== undefined, crm, crm_error }); })() }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "50d8d8dc-8904-5880-9346-6b293cff8dcf",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        4400,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Lead Radar\nPOST a lead to /webhook/lead-intake.\nValidate -> GitHub org check -> GitHub signals -> rule score -> LLM score -> upsert to Postgres -> reply.",
+        "height": 160,
+        "width": 400
+      },
+      "id": "403a1f80-df3b-559e-8476-a95a212698e3",
+      "name": "Note ## Lead Radar\nPOST",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -20,
+        60
+      ]
+    },
+    {
+      "parameters": {
+        "content": "If github_org is blank, the pipeline scrapes the homepage to discover it before calling the GitHub API.",
+        "height": 100,
+        "width": 340
+      },
+      "id": "a7f5309b-55b8-52f2-b0a3-34a35865bae8",
+      "name": "Note If github_org is b",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        640,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "content": "Leads with no usable GitHub data skip the LLM call on purpose, so the model never has to guess.",
+        "height": 100,
+        "width": 300
+      },
+      "id": "4cd9e86d-ecfd-5b65-9610-bac91b2c5311",
+      "name": "Note Leads with no usab",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1720,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "content": "The model call retries 3x. If it still fails, or returns junk, the rule score is used and the row says so (score_source = rules_fallback).",
+        "height": 110,
+        "width": 340
+      },
+      "id": "a2084772-2f18-5003-921f-cfee62823a51",
+      "name": "Note The model call ret",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1960,
+        -80
+      ]
+    }
+  ],
+  "connections": {
+    "Lead Intake": {
+      "main": [
+        [
+          {
+            "node": "Normalize & Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize & Validate": {
+      "main": [
+        [
+          {
+            "node": "Valid lead?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid lead?": {
+      "main": [
+        [
+          {
+            "node": "GitHub org known?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Rejected",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitHub org known?": {
+      "main": [
+        [
+          {
+            "node": "GitHub Repos",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Scrape Homepage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrape Homepage": {
+      "main": [
+        [
+          {
+            "node": "Extract GitHub Org",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract GitHub Org": {
+      "main": [
+        [
+          {
+            "node": "GitHub Repos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitHub Repos": {
+      "main": [
+        [
+          {
+            "node": "Compute Signals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute Signals": {
+      "main": [
+        [
+          {
+            "node": "Enough data for AI?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enough data for AI?": {
+      "main": [
+        [
+          {
+            "node": "Build Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Parse & Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Prompt": {
+      "main": [
+        [
+          {
+            "node": "Groq Score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Score": {
+      "main": [
+        [
+          {
+            "node": "Parse & Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Merge": {
+      "main": [
+        [
+          {
+            "node": "Hot lead?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hot lead?": {
+      "main": [
+        [
+          {
+            "node": "Slack Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Upsert Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack Alert": {
+      "main": [
+        [
+          {
+            "node": "Upsert Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Lead": {
+      "main": [
+        [
+          {
+            "node": "Scored? sync to CRM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scored? sync to CRM": {
+      "main": [
+        [
+          {
+            "node": "HubSpot Search",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HubSpot Search": {
+      "main": [
+        [
+          {
+            "node": "HubSpot search ok?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HubSpot search ok?": {
+      "main": [
+        [
+          {
+            "node": "Check Company Exists",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Company Exists": {
+      "main": [
+        [
+          {
+            "node": "HubSpot Update",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HubSpot Create",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HubSpot Update": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HubSpot Create": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

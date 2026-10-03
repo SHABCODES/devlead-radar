@@ -11,8 +11,8 @@ for n in wf["nodes"]:
         p["url"] = p["url"].replace("https://api.github.com", "http://127.0.0.1:9001")
         for k in ("authentication", "genericAuthType"): p.pop(k, None)
         n.pop("credentials", None)
-    if n["name"] in ("Claude Score", "Groq Score"):
-        p["url"] = "http://127.0.0.1:9002" + ("/openai/v1/chat/completions" if "groq" in p["url"] else "/v1/messages")
+    if n["name"] == "Claude Score":
+        p["url"] = "http://127.0.0.1:9002/v1/messages"
         for k in ("authentication", "genericAuthType"): p.pop(k, None)
         n.pop("credentials", None)
         n["maxTries"] = 2; n["waitBetweenTries"] = 500

@@ -29,29 +29,12 @@ function validate(o) {
 
 let llm = null;
 let llmStatus = 'skipped';
-let parseHint = '';
 if (s.data_quality === 'ok') {
-  // Groq / OpenAI-style: choices[0].message.content. Claude: content[0].text.
-  const text =
-    (res && res.choices && res.choices[0] && res.choices[0].message && res.choices[0].message.content) ||
-    (res && res.content && res.content[0] && res.content[0].text) ||
-    '';
+  const text = res && res.content && res.content[0] ? res.content[0].text : '';
   llm = validate(extractJson(text));
-  const fin = res && res.choices && res.choices[0] && res.choices[0].finish_reason;
-  parseHint = 'finish_reason=' + (fin || 'n/a') + ' text=' + String(text).slice(0, 120);
   if (llm) llmStatus = 'ok';
   else if (res && (res.error || res.type === 'error')) llmStatus = 'api_error';
   else llmStatus = 'parse_error';
-}
-
-// Short, single-line error text for debugging. Never stored in the database.
-let llmError = null;
-if (llmStatus === 'api_error') {
-  const e = res.error;
-  const msg = (e && (e.message || (typeof e === 'string' ? e : ''))) || res.message || 'unknown error';
-  llmError = String(msg).replace(/\s+/g, ' ').slice(0, 200);
-} else if (llmStatus === 'parse_error') {
-  llmError = parseHint.replace(/\s+/g, ' ').slice(0, 200);
 }
 
 let status;
@@ -82,10 +65,9 @@ return {
     final_score: finalScore,
     score_source: scoreSource,
     llm_status: llmStatus,
-    llm_error: llmError,
     llm_score: llm ? llm.score : null,
     llm_confidence: llm ? llm.confidence : null,
-    reason: llm ? llm.reason : null,
+    reason: llm ? llm.reason : (res && res.error ? JSON.stringify(res.error) : null),
     opener: llm ? llm.opener : null,
     opener_dropped: llm ? llm.opener_dropped : false,
     rule_score: s.rule_score,

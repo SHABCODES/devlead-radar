@@ -26,12 +26,9 @@ http.createServer((req, res) => {
   req.on('end', () => {
     const send = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
     const body = JSON.parse(raw || '{}');
-    const openai = req.url.startsWith('/openai/');
-    const content = body.messages[body.messages.length - 1].content;
-    if (content.includes('"github_org": "llmdown"')) return send(500, { error: { message: 'boom' } });
-    const text = (t) => send(200, openai
-      ? { choices: [{ message: { role: 'assistant', content: t } }] }
-      : { content: [{ type: 'text', text: t }] });
+    const content = body.messages[0].content;
+    if (content.includes('"github_org": "llmdown"')) return send(500, { type: 'error', error: { message: 'boom' } });
+    const text = (t) => send(200, { content: [{ type: 'text', text: t }] });
     if (content.includes('"github_org": "garbagellm"')) return text('I cannot help with that.');
     const facts = JSON.parse(content.slice(content.indexOf('{')));
     const good = facts.stars_total > 1000;

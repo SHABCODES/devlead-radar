@@ -21,7 +21,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 FIELDS = ["company", "domain", "human_score", "http", "status", "final_score", "llm_score",
-          "rule_tier", "score_source", "llm_status", "llm_error", "needs_review", "opener_dropped", "reason", "errors"]
+          "rule_tier", "score_source", "llm_status", "needs_review", "opener_dropped", "reason", "errors"]
 
 
 def post(url, payload, timeout=90):
@@ -49,13 +49,13 @@ def run(url, leads_path, out_path, delay):
             "company": row["company"], "domain": row["domain"], "human_score": row["human_score"],
             "http": http, "status": res.get("status", ""), "final_score": res.get("final_score", ""),
             "llm_score": res.get("llm_score", ""), "rule_tier": res.get("rule_tier", ""),
-            "score_source": res.get("score_source", ""), "llm_status": res.get("llm_status", ""), "llm_error": res.get("llm_error", "") or "",
+            "score_source": res.get("score_source", ""), "llm_status": res.get("llm_status", ""),
             "needs_review": res.get("needs_review", ""), "opener_dropped": res.get("opener_dropped", ""),
             "reason": res.get("reason", "") or "", "errors": "; ".join(res.get("errors", []) or []),
         })
         print(f"[{i}/{len(rows)}] {row['company'][:28]:<28} http={http} status={out[-1]['status']} score={out[-1]['final_score']}")
         time.sleep(delay)
-    with open(out_path, "w", newline="", encoding="utf-8") as f:
+    with open(out_path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=FIELDS)
         w.writeheader()
         w.writerows(out)

@@ -19,24 +19,22 @@ const system = [
   'Scale: 1 = clearly not a fit, 3 = unclear, 5 = strong fit with visible infrastructure work.',
 ].join('\n');
 
-// __BUILD_HIDE_KEYWORD_HITS__ is substituted at build time by build_workflow.py.
-// Set to true with --hide-keyword-hits to test whether the model judges better
-// from repo names/descriptions alone, without the rule-stage keyword list.
-const hideKeywordHits = __BUILD_HIDE_KEYWORD_HITS__;
-
-const { keyword_hits: _dropped, ...signalsWithout } = s.signals;
 const facts = {
   company: s.company,
   domain: s.domain,
   github_org: s.github_org,
-  ...(hideKeywordHits ? signalsWithout : s.signals),
+  ...s.signals,
 };
 
-// Provider-neutral: the HTTP node wraps these in the right request shape (Claude or Groq).
 return {
   json: {
     ...s,
-    llm_system: system,
-    llm_user: 'Lead facts:\n' + JSON.stringify(facts, null, 2),
+    llm_request: {
+      model: 'claude-3-5-haiku-20241022',
+      max_tokens: 400,
+      temperature: 0,
+      system,
+      messages: [{ role: 'user', content: 'Lead facts:\n' + JSON.stringify(facts, null, 2) }],
+    },
   },
 };

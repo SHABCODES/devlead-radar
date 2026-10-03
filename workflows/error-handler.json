@@ -1,0 +1,84 @@
+{
+  "id": "leadRadarErr00001",
+  "name": "Lead Radar: error handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "d3b60db6-8b66-53f5-8bb3-3084e8739c6f",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "const e = $json;\nreturn { json: {\n  workflow: e.workflow && e.workflow.name,\n  node: e.execution && e.execution.lastNodeExecuted,\n  message: (e.execution && e.execution.error && e.execution.error.message) || 'unknown',\n  execution_id: e.execution && e.execution.id,\n} };"
+      },
+      "id": "3c67b765-5dfe-5d80-9956-d57426a12629",
+      "name": "Format Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO workflow_errors (workflow, node, message, execution_id) VALUES ($1,$2,$3,$4);",
+        "options": {
+          "queryReplacement": "={{ [$json.workflow, $json.node, $json.message, String($json.execution_id)] }}"
+        }
+      },
+      "id": "3c6c5bf6-ecc9-5c51-911f-db164bde7a6e",
+      "name": "Log Error",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        440,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "crm-postgres",
+          "name": "CRM Postgres"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Format Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Error": {
+      "main": [
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
